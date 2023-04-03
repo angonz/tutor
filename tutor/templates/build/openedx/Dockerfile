@@ -3,7 +3,9 @@ FROM docker.io/ubuntu:20.04 as minimal
 LABEL maintainer="Overhang.io <contact@overhang.io>"
 
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt update && \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt update && \
     apt install -y build-essential curl git language-pack-en
 ENV LC_ALL en_US.UTF-8
 {{ patch("openedx-dockerfile-minimal") }}
@@ -11,7 +13,9 @@ ENV LC_ALL en_US.UTF-8
 ###### Install python with pyenv in /opt/pyenv and create virtualenv in /openedx/venv
 FROM minimal as python
 # https://github.com/pyenv/pyenv/wiki/Common-build-problems#prerequisites
-RUN apt update && \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt update && \
     apt install -y libssl-dev zlib1g-dev libbz2-dev \
     libreadline-dev libsqlite3-dev wget curl llvm libncurses5-dev libncursesw5-dev \
     xz-utils tk-dev libffi-dev liblzma-dev python-openssl git
@@ -46,6 +50,12 @@ RUN curl -fsSL https://github.com/openedx/edx-platform/commit/20b93b8b01276edadd
 {# Example: RUN curl -fsSL https://github.com/openedx/edx-platform/commit/<GITSHA1> | git am #}
 {{ patch("openedx-dockerfile-post-git-checkout") }}
 
+##### Empty layer with just the repo at the root.
+# This is useful when overriding the build context with a host repo:
+# docker build --build-context edx-platform=/path/to/edx-platform
+FROM scratch as edx-platform
+COPY --from=code /openedx/edx-platform /
+
 ###### Download extra locales to /openedx/locale/contrib/locale
 FROM minimal as locales
 ARG OPENEDX_I18N_VERSION={{ OPENEDX_COMMON_VERSION }}
@@ -60,26 +70,33 @@ RUN cd /tmp \
 FROM python as python-requirements
 ENV PATH /openedx/venv/bin:${PATH}
 ENV VIRTUAL_ENV /openedx/venv/
+ENV XDG_CACHE_HOME /openedx/.cache
 
-RUN apt update && apt install -y software-properties-common libmysqlclient-dev libxmlsec1-dev libgeos-dev
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt update \
+    && apt install -y software-properties-common libmysqlclient-dev libxmlsec1-dev libgeos-dev
 
 # Install the right version of pip/setuptools
-# https://pypi.org/project/setuptools/
-# https://pypi.org/project/pip/
-# https://pypi.org/project/wheel/
-RUN pip install setuptools==65.5.1 pip==22.3.1. wheel==0.38.4
+RUN --mount=type=cache,target=/openedx/.cache/pip,sharing=shared \
+    pip install \
+    # https://pypi.org/project/setuptools/
+    # https://pypi.org/project/pip/
+    # https://pypi.org/project/wheel/
+    setuptools==65.5.1 pip==22.3.1 wheel==0.38.4
 
 # Install base requirements
-COPY --from=code /openedx/edx-platform/requirements/edx/base.txt /tmp/base.txt
-RUN pip install -r /tmp/base.txt
+RUN --mount=type=bind,from=edx-platform,source=/requirements/edx/base.txt,target=/openedx/edx-platform/requirements/edx/base.txt \
+    --mount=type=cache,target=/openedx/.cache/pip,sharing=shared \
+    pip install -r /openedx/edx-platform/requirements/edx/base.txt
 
-# Install django-redis for using redis as a django cache
-# https://pypi.org/project/django-redis/
-RUN pip install django-redis==5.2.0
-
-# Install uwsgi
-# https://pypi.org/project/uWSGI/
-RUN pip install uwsgi==2.0.21
+# Install extra requirements
+RUN --mount=type=cache,target=/openedx/.cache/pip,sharing=shared \
+    pip install \
+    # Use redis as a django cache https://pypi.org/project/django-redis/
+    django-redis==5.2.0 \
+    # uwsgi server https://pypi.org/project/uWSGI/
+    uwsgi==2.0.21
 
 {{ patch("openedx-dockerfile-post-python-requirements") }}
 
@@ -103,18 +120,20 @@ RUN nodeenv /openedx/nodeenv --node=16.14.0 --prebuilt
 
 # Install nodejs requirements
 ARG NPM_REGISTRY={{ NPM_REGISTRY }}
-COPY --from=code /openedx/edx-platform/package.json /openedx/edx-platform/package.json
-COPY --from=code /openedx/edx-platform/package-lock.json /openedx/edx-platform/package-lock.json
 WORKDIR /openedx/edx-platform
-RUN npm clean-install --verbose --registry=$NPM_REGISTRY
+RUN --mount=type=bind,from=edx-platform,source=/package.json,target=/openedx/edx-platform/package.json \
+    --mount=type=bind,from=edx-platform,source=/package-lock.json,target=/openedx/edx-platform/package-lock.json \
+    --mount=type=cache,target=/root/.npm,sharing=shared \
+    npm clean-install --verbose --no-audit --registry=$NPM_REGISTRY
 
 ###### Production image with system and python requirements
 FROM minimal as production
 
 # Install system requirements
-RUN apt update && \
-    apt install -y gettext gfortran graphviz graphviz-dev libffi-dev libfreetype6-dev libgeos-dev libjpeg8-dev liblapack-dev libmysqlclient-dev libpng-dev libsqlite3-dev libxmlsec1-dev lynx ntp pkg-config rdfind && \
-    rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt update \
+    && apt install -y gettext gfortran graphviz graphviz-dev libffi-dev libfreetype6-dev libgeos-dev libjpeg8-dev liblapack-dev libmysqlclient-dev libpng-dev libsqlite3-dev libxmlsec1-dev lynx ntp pkg-config rdfind
 
 # From then on, run as unprivileged "app" user
 # Note that this must always be different from root (APP_USER_ID=0)
@@ -125,13 +144,16 @@ USER ${APP_USER_ID}
 
 # https://hub.docker.com/r/powerman/dockerize/tags
 COPY --from=docker.io/powerman/dockerize:0.19.0 /usr/local/bin/dockerize /usr/local/bin/dockerize
-COPY --chown=app:app --from=code /openedx/edx-platform /openedx/edx-platform
+COPY --chown=app:app --from=edx-platform / /openedx/edx-platform
 COPY --chown=app:app --from=locales /openedx/locale /openedx/locale
 COPY --chown=app:app --from=python /opt/pyenv /opt/pyenv
 COPY --chown=app:app --from=python-requirements /openedx/venv /openedx/venv
 COPY --chown=app:app --from=python-requirements /openedx/requirements /openedx/requirements
 COPY --chown=app:app --from=nodejs-requirements /openedx/nodeenv /openedx/nodeenv
-COPY --chown=app:app --from=nodejs-requirements /openedx/edx-platform/node_modules /openedx/edx-platform/node_modules
+COPY --chown=app:app --from=nodejs-requirements /openedx/edx-platform/node_modules /openedx/node_modules
+
+# Symlink node_modules such that we can bind-mount the edx-platform repository
+RUN ln -s /openedx/node_modules /openedx/edx-platform/node_modules
 
 ENV PATH /openedx/venv/bin:./node_modules/.bin:/openedx/nodeenv/bin:${PATH}
 ENV VIRTUAL_ENV /openedx/venv/
@@ -215,13 +237,15 @@ FROM production as development
 
 # Install useful system requirements (as root)
 USER root
-RUN apt update && \
-    apt install -y vim iputils-ping dnsutils telnet \
-    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt update && \
+    apt install -y vim iputils-ping dnsutils telnet
 USER app
 
 # Install dev python requirements
-RUN pip install -r requirements/edx/development.txt
+RUN --mount=type=cache,target=/openedx/.cache/pip,sharing=shared \
+    pip install -r requirements/edx/development.txt
 # https://pypi.org/project/ipdb/
 # https://pypi.org/project/ipython
 RUN pip install ipdb==0.13.9 ipython==8.7.0

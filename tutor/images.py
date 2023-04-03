@@ -10,7 +10,8 @@ def get_tag(config: Config, name: str) -> str:
 def build(path: str, tag: str, *args: str) -> None:
     fmt.echo_info(f"Building image {tag}")
     command = hooks.Filters.DOCKER_BUILD_COMMAND.apply(
-        ["build", "-t", tag, *args, path]
+        # TODO do not hardcode buildx
+        ["buildx", "build", "-t", tag, *args, path]
     )
     utils.docker(*command)
 
