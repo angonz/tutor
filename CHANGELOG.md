@@ -20,6 +20,12 @@ instructions, because git commits are used to generate release notes:
 
 <!-- scriv-insert-here -->
 
+<a id='changelog-16.0.0'></a>
+## v16.0.0 (2023-04-17)
+
+- 💥[Improvement] During registration, the honor code and terms of service links are no longer visible by default. For most platforms, these links did not work anyway. (by @regisb)
+- 💥[Feature] Upgrade to Palm. (by @regisb)
+
 <a id='changelog-15.3.4'></a>
 ## v15.3.4 (2023-04-13)
 
