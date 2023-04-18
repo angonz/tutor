@@ -23,18 +23,6 @@ RUN git clone https://github.com/pyenv/pyenv $PYENV_ROOT --branch v2.3.17 --dept
 RUN $PYENV_ROOT/bin/pyenv install $PYTHON_VERSION
 RUN $PYENV_ROOT/versions/$PYTHON_VERSION/bin/python -m venv /openedx/venv
 
-<<<<<<< HEAD
-=======
-###### Install Dockerize to wait for mysql DB availability
-FROM minimal as dockerize
-# https://github.com/powerman/dockerize/releases
-ARG DOCKERIZE_VERSION=v0.19.0
-RUN dockerize_url="https://github.com/powerman/dockerize/releases/download/$DOCKERIZE_VERSION/dockerize-linux-$(uname -m | sed 's@aarch@arm@')" \
-    && echo "Downloading dockerize from $dockerize_url" \
-    && curl --fail --location --output /usr/local/bin/dockerize $dockerize_url \
-    && chmod a+x /usr/local/bin/dockerize
-
->>>>>>> c8ea6838 (feat: upgrade to Palm)
 ###### Checkout edx-platform code
 FROM minimal as code
 ARG EDX_PLATFORM_REPOSITORY={{ EDX_PLATFORM_REPOSITORY }}
@@ -52,12 +40,6 @@ RUN git config --global user.email "tutor@overhang.io" \
 {{ patch("openedx-dockerfile-git-patches-default") }}
 {%- else %}
 # Patch edx-platform
-<<<<<<< HEAD
-# Fix broken Circuit Schematic Builder problem template
-# https://github.com/openedx/edx-platform/pull/31365
-RUN curl -fsSL https://github.com/openedx/edx-platform/commit/20b93b8b01276edadddfbbb67f15714fddd81c31.patch | git am
-=======
->>>>>>> c8ea6838 (feat: upgrade to Palm)
 {%- endif %}
 
 {# Example: RUN curl -fsSL https://github.com/openedx/edx-platform/commit/<GITSHA1>.patch | git am #}
